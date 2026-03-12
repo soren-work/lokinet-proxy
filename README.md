@@ -12,6 +12,7 @@ This project provides an optimized **Docker** container that runs **Lokinet** as
 - 🔄 **Auto-Updates**: GitHub Actions workflow automatically builds images with the latest Lokinet releases
 - 🛡️ **Secure by Default**: Uses principle of least privilege with minimal required capabilities
 - 🌐 **SOCKS5 Proxy**: Built-in Dante SOCKS5 server for easy integration with other services
+- ⚙️ **Configurable**: Fine-tune Lokinet behavior with environment variables
 
 ## Quick Start
 
@@ -25,7 +26,7 @@ cd lokinet-proxy
 
 2. Update the image address in `docker-compose.yml`:
 ```yaml
-image: ghcr.io/<your-github-username>/lokinet-proxy:latest
+image: ghcr.io/soren-work/lokinet-proxy:latest
 ```
 
 3. Start the container:
@@ -48,6 +49,10 @@ docker run -d \
   --device /dev/net/tun:/dev/net/tun \
   --sysctl net.ipv6.conf.all.disable_ipv6=0 \
   -e SOCKS_PORT=1080 \
+  -e LOKINET_WORKER_THREADS=1 \
+  -e LOKINET_HOPS=3 \
+  -e LOKINET_PATHS=6 \
+  -e LOKINET_UPSTREAM_DNS=1.1.1.1 \
   -v lokinet-data:/var/lib/lokinet \
   --restart unless-stopped \
   ghcr.io/<your-github-username>/lokinet-proxy:latest
@@ -58,6 +63,10 @@ docker run -d \
 ### Environment Variables
 
 - `SOCKS_PORT` (default: `1080`): The port on which the SOCKS5 proxy listens inside the container
+- `LOKINET_WORKER_THREADS` (default: `1`): CPU thread limit for Lokinet daemon (1-2 recommended for VPS to prevent resource exhaustion)
+- `LOKINET_HOPS` (default: `3`): Number of routing hops (affects latency and anonymity; 3 is a balance point, default is 4)
+- `LOKINET_PATHS` (default: `6`): Number of backup paths (affects smoothness of path switching)
+- `LOKINET_UPSTREAM_DNS` (default: `1.1.1.1`): Public DNS server for fallback resolution
 
 ### Docker Compose Configuration
 
@@ -66,8 +75,8 @@ The `docker-compose.yml` file includes several important settings:
 #### Network Capabilities
 ```yaml
 cap_add:
-  - NET_ADMIN          # Required for network and routing configuration (lokitun0)
-  - NET_BIND_SERVICE   # Required for binding to lower SOCKS5 ports
+  - NET_ADMIN          # Allow container to configure network and routing (required for lokitun0)
+  - NET_BIND_SERVICE   # Allow binding to lower SOCKS5 ports
 ```
 
 #### TUN Device
@@ -79,28 +88,49 @@ devices:
 #### IPv6 Support
 ```yaml
 sysctls:
-  - net.ipv6.conf.all.disable_ipv6=0  # Lokinet requires IPv6
+  - net.ipv6.conf.all.disable_ipv6=0  # Lokinet requires IPv6 support
+```
+
+#### Environment Variables
+```yaml
+environment:
+  - SOCKS_PORT=1080
+  - LOKINET_WORKER_THREADS=1
+  - LOKINET_HOPS=3
+  - LOKINET_PATHS=6
+  - LOKINET_UPSTREAM_DNS=1.1.1.1
+```
+
+#### DNS Configuration
+```yaml
+dns:
+  - 127.3.2.1   # For resolving .loki darknet domains
+  - 1.1.1.1     # Backup DNS for fallback to public internet
 ```
 
 #### Data Persistence
 ```yaml
 volumes:
-  - ./data:/var/lib/lokinet  # Persists node keys and state
+  - ./data:/var/lib/lokinet  # Persists node keys and state to prevent identity reset after restart
 ```
 
 ### Port Mapping
 
-By default, the SOCKS5 port is **not exposed** to the host. Choose one of these approaches:
+By default, the SOCKS5 port is exposed to localhost only. Choose one of these approaches:
 
 #### Local Testing Only
-Uncomment in `docker-compose.yml` to expose only to localhost:
+The default configuration exposes the port only to localhost:
 ```yaml
 ports:
   - "127.0.0.1:1080:1080"
 ```
 
 #### Integration with Other Containers
-If using with Xray/Marzban on the same Docker network, access via `lokinet:1080` without exposing the port.
+If using with Xray/Marzban on the same Docker network, comment out the ports section and access via `lokinet:1080` directly:
+```yaml
+# ports:
+#   - "127.0.0.1:1080:1080"
+```
 
 #### Custom Network
 To connect to an existing Docker network:
@@ -109,6 +139,32 @@ networks:
   default:
     name: proxy_net
     external: true
+```
+
+### Tuning Lokinet Performance
+
+#### For VPS with Limited Resources
+```yaml
+environment:
+  - LOKINET_WORKER_THREADS=1    # Limit CPU usage
+  - LOKINET_HOPS=2              # Reduce latency
+  - LOKINET_PATHS=4             # Reduce memory usage
+```
+
+#### For Maximum Anonymity
+```yaml
+environment:
+  - LOKINET_WORKER_THREADS=2    # More processing power
+  - LOKINET_HOPS=4              # More routing hops
+  - LOKINET_PATHS=8             # More backup paths
+```
+
+#### For Balanced Performance
+```yaml
+environment:
+  - LOKINET_WORKER_THREADS=1    # Default
+  - LOKINET_HOPS=3              # Default (recommended)
+  - LOKINET_PATHS=6             # Default
 ```
 
 ## Usage Examples
@@ -147,15 +203,34 @@ If running Xray/Marzban in the same Docker network:
 
 ### How It Works
 
-1. **Lokinet Daemon**: Runs the Lokinet client, creating a virtual `lokitun0` network interface
-2. **Dante SOCKS5 Server**: Listens on the configured port and routes traffic through `lokitun0`
-3. **Docker Entrypoint**: Orchestrates startup, waits for the TUN interface, and configures Dante dynamically
+1. **Lokinet Daemon**: Runs the Lokinet client with configurable parameters, creating a virtual `lokitun0` network interface
+2. **Configuration Generation**: Dynamically generates `lokinet.ini` from environment variables for worker threads, hops, and paths
+3. **DNS Configuration**: Sets up DNS resolution for `.loki` domains via Lokinet's DNS server (127.3.2.1) with fallback to public DNS
+4. **Dante SOCKS5 Server**: Listens on the configured port and routes traffic through `lokitun0`
+5. **Docker Entrypoint**: Orchestrates startup, waits for the TUN interface, configures DNS, and starts Dante dynamically
+
+### Startup Sequence
+
+The `docker-entrypoint.sh` script performs the following steps:
+
+1. Configures DNS resolvers (`/etc/resolv.conf`) with Lokinet's DNS server and fallback
+2. Creates the `/var/lib/lokinet` directory for node data
+3. Generates `lokinet.ini` configuration file with environment variables:
+   - `worker-threads`: CPU thread limit
+   - `hops`: Routing hops for anonymity
+   - `paths`: Backup path count
+   - `upstream`: Fallback DNS server
+4. Starts the Lokinet daemon in the background
+5. Waits for the `lokitun0` interface to become available
+6. Dynamically generates Dante SOCKS5 configuration using the `SOCKS_PORT` environment variable
+7. Starts the Dante SOCKS5 server
 
 ### Image Details
 
 - **Base Image**: `debian:bookworm-slim`
 - **Size**: Optimized for minimal footprint
 - **Dependencies**: curl, gnupg, iptables, iproute2, dante-server, net-tools, jq, ca-certificates
+- **Lokinet Source**: Official Oxen repository (bookworm)
 
 ## Automatic Updates
 
@@ -192,6 +267,33 @@ docker-compose exec lokinet ps aux | grep danted
 docker-compose exec lokinet curl --socks5 127.0.0.1:1080 https://example.com
 ```
 
+### DNS resolution issues
+```bash
+# Check DNS configuration inside container
+docker-compose exec lokinet cat /etc/resolv.conf
+
+# Test DNS resolution for .loki domains
+docker-compose exec lokinet nslookup example.loki 127.3.2.1
+```
+
+### High CPU usage
+If the container is consuming too much CPU:
+```bash
+# Reduce worker threads
+docker-compose down
+# Edit docker-compose.yml and set LOKINET_WORKER_THREADS=1
+docker-compose up -d
+```
+
+### Slow connection
+If experiencing slow speeds:
+```bash
+# Try reducing hops for lower latency
+# Edit docker-compose.yml and set LOKINET_HOPS=2
+# Or increase paths for better path switching
+# Edit docker-compose.yml and set LOKINET_PATHS=8
+```
+
 ### IPv6 issues
 Ensure the host system supports IPv6 and the sysctl setting is applied:
 ```bash
@@ -204,7 +306,9 @@ docker-compose exec lokinet sysctl net.ipv6.conf.all.disable_ipv6
 - ✅ Only grants necessary capabilities (NET_ADMIN, NET_BIND_SERVICE)
 - ✅ Runs on Debian slim image to minimize attack surface
 - ✅ Persists node keys to prevent identity reset
+- ✅ Generates configuration dynamically from environment variables
 - ⚠️ SOCKS5 proxy is not authenticated by default - restrict network access accordingly
+- ⚠️ DNS queries to `.loki` domains are resolved through Lokinet's DNS server
 
 ## Building Locally
 

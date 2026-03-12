@@ -36,30 +36,74 @@ jobs:
           echo "upstream_version=$VERSION" >> $GITHUB_OUTPUT
           echo "Fetched upstream Lokinet version: $VERSION"
 
-      - name: Check if version already exists in registry
-        id: version_check
+      - name: Get previous successful build info
+        id: previous_build
+        run: |
+          # Get the last successful workflow run
+          RESPONSE=$(curl -s \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/workflows/docker-publish.yml/runs?status=success&per_page=1")
+          
+          PREVIOUS_SHA=$(echo "$RESPONSE" | jq -r '.workflow_runs[0].head_commit.id // "none"')
+          
+          echo "previous_sha=$PREVIOUS_SHA" >> $GITHUB_OUTPUT
+          echo "Previous successful commit: $PREVIOUS_SHA"
+
+      - name: Check if build is needed
+        id: build_check
         run: |
           VERSION=${{ steps.upstream_version.outputs.upstream_version }}
+          CURRENT_SHA=${{ github.sha }}
+          PREVIOUS_SHA=${{ steps.previous_build.outputs.previous_sha }}
           IMAGE_NAME=${{ env.IMAGE_NAME }}
           
-          echo "Checking if version $VERSION exists in ${{ env.REGISTRY }}/$IMAGE_NAME..."
+          echo "Current commit SHA: $CURRENT_SHA"
+          echo "Previous commit SHA: $PREVIOUS_SHA"
+          echo "Upstream version: $VERSION"
           
-          # Use GitHub API to check if the tag exists
-          # This works without authentication for public registries
+          # Check if version exists in registry
           RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
             "https://ghcr.io/v2/$IMAGE_NAME/manifests/$VERSION" \
             -H "Accept: application/vnd.docker.distribution.manifest.v2+json")
           
-          if [ "$RESPONSE" = "200" ]; then
-            echo "✓ Version $VERSION already exists in registry"
-            echo "version_exists=true" >> $GITHUB_OUTPUT
+          BUILD_NEEDED=false
+          BUILD_REASON=""
+          
+          if [ "$RESPONSE" != "200" ]; then
+            BUILD_NEEDED=true
+            BUILD_REASON="New upstream version detected"
+            echo "✗ Version $VERSION is new in upstream"
           else
-            echo "✗ Version $VERSION is new, will build and push"
-            echo "version_exists=false" >> $GITHUB_OUTPUT
+            echo "✓ Version $VERSION already exists in registry"
+          fi
+          
+          # Check if there are new commits since last build
+          if [ "$CURRENT_SHA" != "$PREVIOUS_SHA" ] && [ "$PREVIOUS_SHA" != "none" ]; then
+            BUILD_NEEDED=true
+            if [ -z "$BUILD_REASON" ]; then
+              BUILD_REASON="New commits detected"
+            else
+              BUILD_REASON="$BUILD_REASON + New commits detected"
+            fi
+            echo "✗ New commits detected since last build"
+          elif [ "$PREVIOUS_SHA" = "none" ]; then
+            echo "ℹ️  First build or no previous successful run"
+            BUILD_NEEDED=true
+            BUILD_REASON="Initial build"
+          fi
+          
+          echo "build_needed=$BUILD_NEEDED" >> $GITHUB_OUTPUT
+          echo "build_reason=$BUILD_REASON" >> $GITHUB_OUTPUT
+          
+          if [ "$BUILD_NEEDED" = "true" ]; then
+            echo "🔨 Build will proceed: $BUILD_REASON"
+          else
+            echo "⏭️  Build skipped: No changes detected"
           fi
 
       - name: Log in to the Container registry
-        if: steps.version_check.outputs.version_exists == 'false'
+        if: steps.build_check.outputs.build_needed == 'true'
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -67,7 +111,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract metadata (tags, labels) for Docker
-        if: steps.version_check.outputs.version_exists == 'false'
+        if: steps.build_check.outputs.build_needed == 'true'
         id: meta
         uses: docker/metadata-action@v5
         with:
@@ -79,7 +123,7 @@ jobs:
             type=sha,format=short
 
       - name: Build and push Docker image
-        if: steps.version_check.outputs.version_exists == 'false'
+        if: steps.build_check.outputs.build_needed == 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -87,7 +131,11 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
-      - name: Skip build notification
-        if: steps.version_check.outputs.version_exists == 'true'
+      - name: Build result notification
         run: |
-          echo "ℹ️  Version ${{ steps.upstream_version.outputs.upstream_version }} already exists in registry. Skipping build."
+          if [ "${{ steps.build_check.outputs.build_needed }}" = "true" ]; then
+            echo "✅ Build completed"
+            echo "Reason: ${{ steps.build_check.outputs.build_reason }}"
+          else
+            echo "⏭️  Build skipped: No changes detected"
+          fi

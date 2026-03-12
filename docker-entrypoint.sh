@@ -1,6 +1,27 @@
 #!/bin/bash
 
+echo "nameserver 127.3.2.1" > /tmp/resolv.conf
+echo "nameserver 1.1.1.1" >> /tmp/resolv.conf
+cat /tmp/resolv.conf > /etc/resolv.conf || true
+echo "DNS forcibly set to 127.3.2.1"
+
 mkdir -p /var/lib/lokinet
+
+echo "Generating lokinet.ini from environment variables..."
+cat <<EOF > /var/lib/lokinet/lokinet.ini
+[router]
+worker-threads=${LOKINET_WORKER_THREADS}
+
+[network]
+hops=${LOKINET_HOPS}
+paths=${LOKINET_PATHS}
+persist-addrmap-file=/var/lib/lokinet/addrmap.dat
+
+[dns]
+upstream=${LOKINET_UPSTREAM_DNS}
+EOF
+echo "lokinet.ini generated successfully."
+
 echo "Starting lokinet daemon..."
 lokinet &
 

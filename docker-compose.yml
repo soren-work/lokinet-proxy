@@ -2,7 +2,7 @@ services:
   lokinet:
     # Replace the image address here with the actual address built through GitHub Actions
     # Example: ghcr.io/soren-work/lokinet-proxy:latest
-    image: ghcr.io/<your-github-username>/lokinet-proxy:latest
+    image: ghcr.io/soren-work/lokinet-proxy:latest
     container_name: lokinet
     
     # Follow the principle of least privilege, do not use privileged: true
@@ -23,17 +23,29 @@ services:
     environment:
       # Dynamically configure the listening port for SOCKS5 proxy
       - SOCKS_PORT=1080
+      # CPU thread limit (to prevent running out of resources on VPS, 1~2 is recommended)
+      - LOKINET_WORKER_THREADS=1
+      # Routing hops (affects latency and anonymity, 3 is a balance point, default is 4)
+      - LOKINET_HOPS=3
+      # Backup path count (affects smoothness of switching, default is 6)
+      - LOKINET_PATHS=6
+      # Public DNS for fallback
+      - LOKINET_UPSTREAM_DNS=1.1.1.1
       
     ports:
       # [Local Testing Instructions]
       # If you only want to test Lokinet locally or on a VPS host directly, uncomment the code below:
       # This will map the SOCKS5 port inside the container to port 1080 on the host (localhost only for maximum security).
-      # - "127.0.0.1:1080:1080"
+      - "127.0.0.1:1080:1080"
       
       # [Bypass Proxy Instructions]
       # If you are using it with Xray/Marzban containers and they are on the same Docker network,
       # you don't need to expose the port. Xray can access this service directly via `lokinet:1080`.
-      
+    
+    dns:
+      - 127.3.2.1   # For resolving .loki darknet domains
+      - 1.1.1.1     # Backup DNS for fallback to public internet
+    
     volumes:
       # Persist Lokinet's node keys and state data to prevent identity reset after restart
       - ./data:/var/lib/lokinet
