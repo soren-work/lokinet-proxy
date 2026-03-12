@@ -13,7 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # Clean apt cache, this step is key to keeping the image small
     apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
-COPY docker-entrypoint /docker-entrypoint
+COPY docker-entrypoint.sh /docker-entrypoint
 RUN chmod +x /docker-entrypoint
 
 EXPOSE ${SOCKS_PORT}
