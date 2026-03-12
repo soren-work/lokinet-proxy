@@ -1,0 +1,45 @@
+services:
+  lokinet:
+    # Replace the image address here with the actual address built through GitHub Actions
+    # Example: ghcr.io/soren-work/lokinet-proxy:latest
+    image: ghcr.io/<your-github-username>/lokinet-proxy:latest
+    container_name: lokinet
+    
+    # Follow the principle of least privilege, do not use privileged: true
+    cap_add:
+      - NET_ADMIN          # Allow container to configure network and routing (required for lokitun0)
+      - NET_BIND_SERVICE   # Allow binding to lower SOCKS5 ports
+    
+    # Precisely map the host's TUN device to the container
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    
+    # Lokinet requires IPv6 support
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=0
+      
+    restart: unless-stopped
+    
+    environment:
+      # Dynamically configure the listening port for SOCKS5 proxy
+      - SOCKS_PORT=1080
+      
+    ports:
+      # [Local Testing Instructions]
+      # If you only want to test Lokinet locally or on a VPS host directly, uncomment the code below:
+      # This will map the SOCKS5 port inside the container to port 1080 on the host (localhost only for maximum security).
+      # - "127.0.0.1:1080:1080"
+      
+      # [Bypass Proxy Instructions]
+      # If you are using it with Xray/Marzban containers and they are on the same Docker network,
+      # you don't need to expose the port. Xray can access this service directly via `lokinet:1080`.
+      
+    volumes:
+      # Persist Lokinet's node keys and state data to prevent identity reset after restart
+      - ./data:/var/lib/lokinet
+      
+# If you need to connect it to an existing container network (e.g., a network named proxy_net), uncomment the code below:
+# networks:
+#   default:
+#     name: proxy_net
+#     external: true
